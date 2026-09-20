@@ -1,0 +1,24 @@
+# ── 핵심 (필수) ──────────────────────────────────────────────
+fastapi
+uvicorn[standard]
+httpx
+python-dotenv
+python-multipart
+tzdata; sys_platform == 'win32'
+
+# ── Google Calendar 연동 (실제 시연에 필요) ─────────────────────
+google-auth
+google-auth-oauthlib
+google-api-python-client
+
+# ── 테스트 ──────────────────────────────────────────────────
+pytest
+
+# ── 선택: LLM 자연어 조건 해석 · 회의 자료 분석 (없어도 일정 기능 전체 동작) ────
+# anthropic
+
+# ── 선택: 회의 준비 (PDF 자료 분석) ────────────────────────────
+# pypdf
+
+# ── 선택: Slack 승인 (웹 승인이 기본 경로) ──────────────────────
+# slack-bolt

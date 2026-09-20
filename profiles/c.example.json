@@ -1,0 +1,7 @@
+{
+  "user_key": "participant-c@example.com",
+  "display_name": "승현",
+  "email": "participant-c@example.com",
+  "token_path": "tokens/token_c.json",
+  "is_organizer": false
+}

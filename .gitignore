@@ -1,0 +1,36 @@
+# ── 비밀 — 절대 커밋 금지 ─────────────────────────────────────
+.env
+.env.*
+!.env.example
+credentials.json
+tokens/
+*.token.json
+secrets/
+settings/
+profiles/a.json
+profiles/b.json
+profiles/c.json
+
+# ── 데이터 ─────────────────────────────────────────────────
+*.db
+*.db-wal
+*.db-shm
+*.bak*
+
+# ── Python ────────────────────────────────────────────────
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.test-tmp/
+*.egg-info/
+
+# ── 에디터 / OS ───────────────────────────────────────────
+.vscode/settings.json
+.claude/
+scratchpad/
+*.log
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,7 @@
+{
+  "user_key": "organizer@example.com",
+  "display_name": "재원",
+  "email": "organizer@example.com",
+  "token_path": "tokens/token_a.json",
+  "is_organizer": true
+}
