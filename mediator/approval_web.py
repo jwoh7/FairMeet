@@ -117,7 +117,12 @@ def decide(token: str, verdict: str = Form(...)):
         return _done("거절이 접수되었습니다",
                      "이유는 다른 참가자에게 전달되지 않습니다. "
                      "더 제안할 수 있는 시간이 없어 이번 협상은 종료되었습니다.")
-    if result.status in ("recorded", "all_approved"):
+    if result.status == "all_approved":
+        # 선택 참석자의 거절이 마지막 응답이었고, 남은 동의만으로 확정 기준을 채운 경우
+        return _done("거절이 접수되었습니다 · 확정 기준을 충족했습니다",
+                     "이유는 다른 참가자에게 전달되지 않습니다. "
+                     "동의한 참가자만으로 기준을 채워 일정이 등록됩니다.")
+    if result.status == "recorded":
         # 선택 참석자의 거절이라 확정 기준에는 영향이 없는 경우
         return _done("거절이 접수되었습니다",
                      "이유는 다른 참가자에게 전달되지 않습니다. "

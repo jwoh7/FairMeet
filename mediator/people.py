@@ -30,6 +30,11 @@ _CUE = re.compile(r"회의|미팅|만나|만남|약속|모임|스터디|면담|�
 _COUNT = {"한": 1, "두": 2, "세": 3, "네": 4, "다섯": 5, "여섯": 6}
 _COUNT_RE = re.compile(r"(?<!최소\s)(?<!최소)(한|두|세|네|다섯|여섯|\d{1,2})\s*명\s*"
                        r"(?:과|와|랑|이랑|하고|만|이서|끼리|으로)")
+# '재원, 도연, 승현 중 2명만 참여해도 되는' 은 참가자를 2명만 고르라는 뜻이 아니라 승인 정족수 표현이다.
+# 이런 문맥에서는 인원 수를 '참가자 수'로 읽지 않는다 (정족수는 nl_rules 가 따로 읽는다).
+_OUT_OF_RE = re.compile(r"(?:중|중에서)\s*(?:최소\s*)?(?:한|두|세|네|다섯|여섯|\d{1,2})\s*명")
+_ENOUGH_RE = re.compile(r"(?:한|두|세|네|다섯|여섯|\d{1,2})\s*명\s*(?:만|이상)?\s*"
+                        r"(?:[가-힣]{0,6}\s*)?(?:해도|하면)\s*(?:되|돼|충분|진행|확정)")
 _ALL_RE = re.compile(r"(?:모두|전원|다\s*같이|다같이|전체|다\s*함께)\s*(?:와|과|랑|이랑|하고|함께|같이)|"
                      r"등록된\s*(?:모든|전체)|모든\s*(?:참가자|팀원|멤버)\s*(?:와|과|랑|하고|이랑|함께|같이)")
 _TIMEISH = re.compile(r".*(?:요일|시|분|주|월|일|간|후|전|때|오전|오후|저녁|아침|점심|내일|모레|오늘|이번|다음|주말)$")
@@ -88,7 +93,7 @@ def extract(sentences: list[str], names: list[str]) -> dict:
             continue
         if _ALL_RE.search(s):
             everyone, src = True, src or s
-        if m_count and count is None:
+        if m_count and count is None and not (_OUT_OF_RE.search(s) or _ENOUGH_RE.search(s)):
             g = m_count.group(1)
             count = _COUNT.get(g, int(g) if g.isdigit() else None)
 

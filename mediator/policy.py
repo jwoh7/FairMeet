@@ -122,10 +122,15 @@ def build_policy(mode: str = "all", *, min_count: int | None = None,
 def evaluate(policy: ApprovalPolicy, participant_ids, approved, rejected) -> str:
     """현재 응답으로 이 제안이 어떻게 되는지 판정한다.
 
+    정족수(min_count/min_ratio)는 '그 인원이 모이는 즉시 확정'이 아니다. 초대된 참가자 전원이
+    승인/거절로 응답하기 전까지는 아직 응답하지 않은 사람을 기다린다 — 그래야 뒤늦게 거절이 와도
+    이미 확정해 버리는 일이 없다. 다만 남은 인원이 전부 승인해도 정족수를 채울 수 없는 경우처럼
+    결과가 이미 수학적으로 정해졌으면 그때는 기다릴 이유가 없어 즉시 실패로 판정한다.
+
     Returns:
-        'approved' 확정 기준 충족
+        'approved' 확정 기준을 충족했고 참가자 전원이 응답을 마쳤음
         'failed'   필수 참석자가 거절했거나, 남은 사람이 모두 승인해도 정족수 불가
-        'pending'  아직 결정할 수 없음
+        'pending'  아직 결정할 수 없음 (기준을 채웠어도 응답하지 않은 사람이 남아 있으면 포함)
     """
     pids = list(participant_ids)
     total = len(pids)
@@ -137,11 +142,31 @@ def evaluate(policy: ApprovalPolicy, participant_ids, approved, rejected) -> str
 
     if rejected & required:
         return "failed"
-    if required <= approved and len(approved) >= needed:
-        return "approved"
     if total - len(rejected) < needed:
         return "failed"
+    everyone_responded = len(approved) + len(rejected) == total
+    if required <= approved and len(approved) >= needed and everyone_responded:
+        return "approved"
     return "pending"
+
+
+def settle_at_deadline(policy: ApprovalPolicy, participant_ids, approved, rejected) -> str:
+    """응답 기한이 끝난 시점의 최종 판정. 미응답자는 더 기다리지 않고 '응답 없음'으로 본다.
+
+    정족수와 필수 참석자 기준은 (응답자 수가 아니라) 초대된 전체 인원을 기준으로 다시 검증한다.
+
+    Returns: 'approved' (지금까지의 승인만으로 기준 충족) | 'failed'
+    """
+    pids = list(participant_ids)
+    total = len(pids)
+    approved = set(approved)
+    if policy.mode == "all":
+        required, needed = set(pids), total
+    else:
+        required, needed = set(policy.required), policy.needed(total)
+    if required <= approved and len(approved) >= needed:
+        return "approved"
+    return "failed"
 
 
 # ---- 사용자에게 보여줄 문장 ----------------------------------------------------------

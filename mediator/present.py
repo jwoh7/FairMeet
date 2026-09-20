@@ -206,7 +206,7 @@ def meeting_detail(session_id: str) -> dict | None:
     s = store.get_session(session_id)
     if s is None:
         return None
-    store.expire_stale_sessions()
+    approval_flow.settle_expired_sessions()      # 기한 경과 세션은 정족수를 다시 검증해 결정한다
     change_flow.expire_stale_changes()
     change_flow.reconcile_all()
     s = store.get_session(session_id)
@@ -255,8 +255,19 @@ def meeting_detail(session_id: str) -> dict | None:
                  "open": r["state"] in change_flow.OPEN_STATES}
                 for r in change["requests"]]
         mails = change["confirmationMails"] or {}
+        # 참가자가 보낸 '확인이 필요한 변경 요청'(접수). 처리 방법은 주최자가 이 카드에서 고른다.
+        intakes = [{"intakeId": i["intakeId"], "requester": i["requester"], "slot": i["slot"],
+                    "createdAt": i["createdAt"], "state": i["state"],
+                    "decisionLabel": i["decisionLabel"],
+                    "options": [{"action": o["action"], "label": o["label"], "hint": o["hint"],
+                                 "enabled": o["enabled"], "reason": o["reason"]}
+                                for o in i["options"]]}
+                   for i in change_flow.intake_cards(session_id, only_open=False)]
+        open_intakes = [i for i in intakes if i["state"] == "open"]
         change_out = {"requests": reqs,
-                      "open": any(r["open"] for r in reqs),
+                      "intakes": intakes,
+                      "openIntakes": len(open_intakes),
+                      "open": any(r["open"] for r in reqs) or bool(open_intakes),
                       "linksSent": (mails.get("sent") or 0),
                       "linksMissing": (mails.get("failed") or 0) + (mails.get("pending") or 0)}
 

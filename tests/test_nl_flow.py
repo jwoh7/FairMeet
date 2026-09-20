@@ -212,9 +212,12 @@ def test_end_to_end_natural_language_with_quorum_reaches_committed():
         assert "선택 참석자입니다" in fx.latest_mail("도연").body_text
         assert "2명 이상" in fx.latest_mail("승현").body_text
 
-        # 재원(필수) + 도연 = 정족수 2 → 승현이 응답하지 않아도 확정된다
+        # 재원(필수) + 도연 = 정족수 2 를 채워도, 승현이 응답하기 전에는 확정되지 않는다
         assert "동의가 기록" in fx.post_link(fx.latest_mail("재원"), "approve").text
-        assert "확정 기준을 충족" in fx.post_link(fx.latest_mail("도연"), "approve").text
+        assert "동의가 기록" in fx.post_link(fx.latest_mail("도연"), "approve").text
+        assert fx.events() == 0 and store.get_session(sid)["state"] == PENDING
+        # 마지막 사람이 거절하더라도, 응답이 도착하면 기준(필수 1명 + 총 2명)을 다시 보고 확정한다
+        assert "확정 기준을 충족" in fx.post_link(fx.latest_mail("승현"), "reject").text
         assert _wait(lambda: fx.events() == 1)
         assert _wait(lambda: store.get_session(sid)["state"] == "COMMITTED")
         assert fx.events() == 1

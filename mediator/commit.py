@@ -103,12 +103,18 @@ def _finalize(session_id: str, transport, emit=None) -> CommitResult:
         return CommitResult(row["state"], reason="제안된 슬롯이 없습니다")
 
     # 방어선: 승인 기준(기본 = 전원)을 충족하지 못한 제안은 커밋하지 않는다.
+    #   - 아직 응답하지 않은 사람이 남아 있으면 정족수를 채웠어도 커밋하지 않는다 (조기 확정 금지).
+    #   - 응답 기한이 지난 뒤에는 미응답을 더 기다리지 않고, 그때까지의 승인만으로 기준을 다시 본다.
     policy = policy_mod.ApprovalPolicy.from_row(row)
     approved_ids, rejected_ids = store.get_verdicts(session_id)
-    if row["state"] == "PENDING_HUMAN_APPROVAL" and policy_mod.evaluate(
-            policy, [p["agent_id"] for p in parts], approved_ids,
-            rejected_ids) != "approved":
-        return CommitResult(row["state"], reason="승인 기준을 충족하지 못했습니다")
+    if row["state"] == "PENDING_HUMAN_APPROVAL":
+        pids = [p["agent_id"] for p in parts]
+        ok = policy_mod.evaluate(policy, pids, approved_ids, rejected_ids) == "approved"
+        if not ok and row["expires_at"] and row["expires_at"] < store.now():
+            ok = policy_mod.settle_at_deadline(
+                policy, pids, approved_ids, rejected_ids) == "approved"
+        if not ok:
+            return CommitResult(row["state"], reason="승인 기준을 충족하지 못했습니다")
 
     start_iso, end_iso = slots[row["proposed_slot"]]
     start = dt.datetime.fromisoformat(start_iso)

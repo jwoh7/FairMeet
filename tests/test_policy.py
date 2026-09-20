@@ -65,8 +65,8 @@ def test_invalid_policies_are_rejected_with_a_readable_reason():
 
 def test_quorum_without_required_beyond_organizer():
     pol = build_policy("min_count", min_count=2, participant_ids=P3, organizer_id=A)
-    assert evaluate(pol, P3, {A, B}, set()) == "approved"           # 선택 참석자 1명 거절 없이
-    assert evaluate(pol, P3, {A, B}, {C}) == "approved"             # 선택 참석자가 거절해도 충족
+    assert evaluate(pol, P3, {A, B}, set()) == "pending"            # 수는 충족했지만 C 가 아직 미응답
+    assert evaluate(pol, P3, {A, B}, {C}) == "approved"             # 전원 응답 + 선택 참석자 거절 → 충족
     assert evaluate(pol, P3, {A}, {C}) == "pending"                 # 아직 B 가 남았다
     assert evaluate(pol, P3, {A}, {B, C}) == "failed"               # 남은 사람으로 정족수 불가
     assert evaluate(pol, P3, set(), {A}) == "failed"                # 필수(주최자) 거절 → 즉시 실패
@@ -91,22 +91,27 @@ def test_ratio_policy_counts_like_a_fixed_count():
 
 
 def _brute(policy, pids, approved, rejected):
-    """정의 그대로: 남은 사람이 어떻게 응답하더라도 확정이 불가능하면 failed."""
+    """정의 그대로 (evaluate 와 독립적으로 다시 쓴 기준):
+
+      failed   남은 사람이 전부 승인해도 기준을 채울 수 없다 (필수 참석자 거절 포함)
+      approved 전원이 응답을 마쳤고 그 응답이 기준을 채운다
+      pending  그 밖 — 기준을 이미 채웠어도 응답하지 않은 사람이 남아 있으면 기다린다
+    """
     total = len(pids)
     required = set(pids) if policy.mode == "all" else set(policy.required)
     needed = policy.needed(total)
+    approved, rejected = set(approved), set(rejected)
 
     def ok(app):
         return required <= app and len(app) >= needed
 
     pending = [p for p in pids if p not in approved and p not in rejected]
-    if ok(set(approved)):
-        return "approved"
-    for k in range(len(pending) + 1):                       # 남은 사람 중 일부가 승인한다면
-        for extra in itertools.combinations(pending, k):
-            if ok(set(approved) | set(extra)):
-                return "pending"
-    return "failed"
+    best = approved | set(pending)                          # 남은 사람이 전부 승인하는 최선의 경우
+    if not ok(best):
+        return "failed"
+    if pending:
+        return "pending"
+    return "approved" if ok(approved) else "failed"
 
 
 def test_every_combination_matches_the_definition():

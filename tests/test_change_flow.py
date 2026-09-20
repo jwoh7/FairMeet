@@ -32,13 +32,20 @@ def setup_function(fn=None):
 def committed(policy=None, approve=None, send_mail=True):
     """협상 → 승인 → 확정(COMMITTED) 까지 끝낸 세션. 확정 안내 메일도 보낸다.
 
-    정족수 정책이면 기준 인원(주최자+준호)이 승인하는 순간 확정되므로 기본 승인자는 그 둘이다.
-    승인하지 않은 서연은 캘린더 초대만 받은 (참석 미확정) 초대 대상이다."""
+    정족수 정책이면 기준 인원(주최자+준호)만 승인한다. 승인하지 않은 서연은 캘린더 초대만 받은
+    (참석 미확정) 초대 대상이다. 정족수를 채웠어도 미응답자가 있으면 조기 확정되지 않으므로,
+    이 경우에는 실제와 같이 '응답 기한이 지난 뒤 기준을 다시 검증해 확정'하는 경로를 쓴다."""
     if approve is None:
         approve = NAMES if not policy else ("민지", "준호")
     f = start_flow(policy=policy)
     for n in approve:
         f.approve(n)
+    if len(approve) < len(f.agents):                  # 미응답자가 남아 있다 → 기한 만료 후 결정
+        with store.connect() as c:
+            c.execute("UPDATE sessions SET expires_at = '2000-01-01T00:00:00+00:00' "
+                      "WHERE session_id = ?", (f.sid,))
+        settled = approval_flow.settle_expired_sessions()
+        assert f.sid in settled["finalize"], settled
     assert commit_mod.finalize(f.sid, f.transport).state == "COMMITTED"
     if send_mail:
         assert change_flow.prepare_confirmations(f.sid) >= len(approve)

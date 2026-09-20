@@ -509,17 +509,45 @@ async function followup(action) {
 }
 
 function changeCard(d) {
-  const c = d.change || {requests: [], open: false, linksSent: 0, linksMissing: 0};
+  const c = d.change || {requests: [], intakes: [], open: false, linksSent: 0, linksMissing: 0};
+  const intakes = c.intakes || [];
   const card = h("section", {class: "card stack", "aria-labelledby": "ch"}, h("h2", {id: "ch"}, "일정 변경"));
   if (d.confirmed) {
-    card.append(h("p", {class: "note"}, "참가자는 확정 안내 메일의 링크로 변경을 요청할 수 있어요. 요청이 들어와도 다른 참가자의 투표가 통과되기 전에는 일정이 바뀌지 않고, 요청한 사람과 이유는 공개되지 않아요."));
+    card.append(h("p", {class: "note"}, "참가자는 확정 안내 메일의 링크로 변경을 요청할 수 있어요. 요청이 들어와도 주최자가 처리 방법을 고르기 전에는 일정이 바뀌지 않고, 다른 참가자에게 아무것도 보내지 않아요."));
     card.append(h("div", {}, `확정 안내 메일: ${c.linksSent}명에게 발송` + (c.linksMissing ? ` · ${c.linksMissing}명 미발송` : "")));
     if (c.linksMissing || !c.linksSent) card.append(h("button", {class: "btn btn-sm", onclick: sendConfirmLinks}, "확정 안내 메일 다시 보내기"));
   }
-  if (!c.requests.length) card.append(h("p", {class: "empty"}, "변경 요청이 없어요."));
+  if (!c.requests.length && !intakes.length) card.append(h("p", {class: "empty"}, "변경 요청이 없어요."));
+
+  // 확인이 필요한 접수: 주최자가 여기서 처리 방법을 고른다 (참가자는 고를 수 없다).
+  intakes.filter(i => i.state === "open").forEach(i => {
+    const box = h("div", {class: "alert warn stack"},
+      h("strong", {}, "확인이 필요한 변경 요청"),
+      h("div", {}, `${i.requester} 님 · 현재 일정 ${i.slot}`),
+      h("div", {class: "note"}, `요청 시간 ${when(i.createdAt)}`));
+    const acts = h("div", {class: "row"});
+    (i.options || []).forEach(o => {
+      const b = h("button", {class: "btn btn-sm", type: "button", disabled: !o.enabled,
+                             title: o.enabled ? o.hint : o.reason,
+                             onclick: () => decideChange(i.intakeId, o.action, o.label)}, o.label);
+      acts.append(b);
+      if (!o.enabled && o.reason) acts.append(h("span", {class: "note"}, o.reason));
+    });
+    box.append(acts);
+    card.append(box);
+  });
+  intakes.filter(i => i.state !== "open").forEach(i => card.append(
+    h("div", {class: "note"}, `변경 요청 처리 완료${i.decisionLabel ? " · " + i.decisionLabel : ""}`)));
+
   c.requests.forEach(r => card.append(h("div", {class: "alert " + (r.open ? "warn" : "")},
     h("strong", {}, r.kind), " · ", r.stateLabel, r.state === "voting" ? ` · 투표 ${r.voted}/${r.voters}` : "")));
   return card;
+}
+async function decideChange(intakeId, action, label) {
+  const r = await api(`/api/change-requests/${intakeId}/decide`, {json: {action}});
+  if (!r.ok) { toast(r.data.detail || "처리하지 못했어요."); refreshData(); return; }
+  toast(r.data.message || `'${label}' 로 처리했어요.`);
+  refreshData();
 }
 async function sendConfirmLinks() {
   const r = await api(`/session/${S.detail.effectiveId}/change-links/send`, {method: "POST"});

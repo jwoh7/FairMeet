@@ -150,9 +150,10 @@ def _startup():
     if report["backup"]:
         log.info("DB 를 v%s → v%s 로 마이그레이션했습니다. 백업: %s",
                  report["from"], report["to"], report["backup"])
-    expired = store.expire_stale_sessions()
-    if expired:
-        log.info("승인 시간이 지난 세션 %d건을 EXPIRED 로 정리했습니다", len(expired))
+    settled = approval_flow.settle_expired_sessions()
+    if settled["expired"] or settled["finalize"]:
+        log.info("응답 기한이 지난 세션 정리 — 종료 %d건, 기준 충족으로 확정 진행 %d건",
+                 len(settled["expired"]), len(settled["finalize"]))
     stale_changes = change_flow.expire_stale_changes()
     if stale_changes:
         log.info("투표 시간이 지난 일정 변경 요청 %d건을 만료시켰습니다", len(stale_changes))
@@ -593,7 +594,7 @@ def latest_session():
 @app.get("/session/{session_id}/dashboard")
 def session_dashboard(session_id: str):
     """관리자 대시보드용 요약. 승인 링크·토큰·개인별 regret·거절한 사람은 없다."""
-    store.expire_stale_sessions()
+    approval_flow.settle_expired_sessions()      # 기한이 지난 세션은 정책을 다시 검증해 한 번만 결정한다
     change_flow.expire_stale_changes()
     change_flow.expire_stale_intakes()
     change_flow.reconcile_all()

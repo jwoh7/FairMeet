@@ -104,6 +104,23 @@ _TOD = {
 }
 _KO_NUM = {"한": 1, "두": 2, "세": 3, "네": 4, "다섯": 5, "여섯": 6, "일곱": 7, "여덟": 8,
            "아홉": 9, "열": 10}
+# 사람 수는 숫자로도, 우리말 수사로도 말한다 ('2명' / '두 명').
+_NUM_WORD = r"(?:\d{1,2}|" + "|".join(_KO_NUM) + r")"
+
+
+def _people_count(tok: str | None) -> int | None:
+    if not tok:
+        return None
+    return int(tok) if tok.isdigit() else _KO_NUM.get(tok)
+
+
+# '…이었으면 좋겠고' 처럼 바람을 나타내는 서술어 — 이름으로 착각하지 않게 걸러낸다.
+_WISH_TAIL = re.compile(r"좋겠|좋아|바라|했으면|하면|이면|되면")
+# '필수 참석자는 …' 뒤에서 이름 나열이 끝나는 지점 (서술어). 여기까지만 필수 참석자로 읽는다:
+#   '필수 참석자는 재원, 도연, 승현이고 최소 2명…'  → '재원, 도연, 승현이고' 까지
+#   '필수 참여자는 재원이었으면 좋겠고, 재원, 도연, 승현 중 2명…' → '재원이' 까지
+_REQ_TAIL_END = re.compile(r"이었으면|였으면|었으면|했으면|좋겠|좋아|바라|이면|되면|이고|이며|"
+                           r"입니다|이에요|이야|이다|예요")
 
 _CLOCK_RANGE = re.compile(
     r"(?:(?P<ap1>오전|오후)\s*)?(?P<h1>\d{1,2})\s*시(?!간)(?:\s*(?P<m1>\d{1,2})\s*분)?\s*"
@@ -610,16 +627,19 @@ def _participants(ex: _Extract, s: str) -> bool:
     got = False
 
     # 승인 기준
-    m_others = re.search(r"나머지\s*(?:는|은|가|중|중에서|에서)?\s*(?:최소\s*)?(\d{1,2})\s*명", s)
-    m_min = re.search(r"최소\s*(\d{1,2})\s*명|(\d{1,2})\s*명\s*(?:이상|만)\b", s)
+    m_others = re.search(r"나머지\s*(?:는|은|가|중|중에서|에서)?\s*(?:최소\s*)?"
+                         r"(" + _NUM_WORD + r")\s*명", s)
+    m_min = re.search(r"최소\s*(" + _NUM_WORD + r")\s*명"
+                      r"|(" + _NUM_WORD + r")\s*명\s*(?:이상|만)\b", s)
     m_pct = re.search(r"(\d{1,3})\s*%\s*이상", s)
     m_frac = re.search(r"(\d)\s*분의\s*(\d)", s)
-    if m_others:
-        ex.add("quorum", {"kind": "min_count", "count": int(m_others.group(1)),
+    if m_others and _people_count(m_others.group(1)):
+        ex.add("quorum", {"kind": "min_count", "count": _people_count(m_others.group(1)),
                           "scope": "others"}, "hard", 3, s)
         got = True
-    elif m_min and not re.search(r"시간", s[max(0, m_min.start() - 1): m_min.end() + 1]):
-        n = int(m_min.group(1) or m_min.group(2))
+    elif (m_min and _people_count(m_min.group(1) or m_min.group(2))
+            and not re.search(r"시간", s[max(0, m_min.start() - 1): m_min.end() + 1])):
+        n = _people_count(m_min.group(1) or m_min.group(2))
         # "재원 포함 2명 이상"처럼 포함 여부를 이미 말했으면 되묻지 않는다.
         needs_scope = (bool(_find_names(s, names)) and bool(re.search(r"반드시|꼭|필수", s))
                        and not re.search(r"포함", s))
@@ -648,22 +668,42 @@ def _participants(ex: _Extract, s: str) -> bool:
             ex.parse_notes.append("'가능하면'은 사람의 동의 기준으로 해석했습니다. 캘린더 "
                                   "가능 여부는 여전히 참가자 전원 기준입니다.")
 
-    # 필수 참석자
+    # 필수 참석자 ('참석자'와 '참여자'를 같게 본다: '필수참여자는 재원이었으면 좋겠고')
     req_names: list[str] = []
-    m_list = re.search(r"필수\s*참석자\s*(?:는|은|로|:)?\s*(.+)$", s)
+    clauses = split_clauses(s)
+    m_list = re.search(r"필수\s*참[석여]자\s*(?:는|은|로|:)?\s*(.+)$", s)
     if m_list:
         tail = m_list.group(1)
-        req_names += _find_names(tail, names)
+        end = _REQ_TAIL_END.search(tail)         # 서술어까지만 읽는다 (뒤 문장의 참가자 나열 제외)
+        if end:
+            tail = tail[:end.end()]
+        # '재원이었으면 좋겠고' 처럼 서술어가 붙어도 등록된 이름은 찾아낸다 (앞 경계만 본다).
+        req_names += [n for n in names
+                      if re.search(r"(?<![가-힣])" + re.escape(n), tail)]
         for tok in re.findall(r"(?<![가-힣])([가-힣]{2,4})(?=\s*(?:,|와|과|랑|이랑|및|$|입니다|이야|야|이다))",
                               tail):
             base = tok[:-1] if len(tok) >= 3 and tok[-1] in "은는이가" else tok
+            if any(base.startswith(n) for n in names):      # '승현이고' 처럼 조사·서술어가 붙은 등록된 이름
+                continue
             if base not in names and base not in _STOP_NAMES and tok not in names \
-                    and base not in req_names and len(base) >= 2:
+                    and base not in req_names and len(base) >= 2 \
+                    and not _WISH_TAIL.search(tok):
                 req_names.append(base)
-    for clause in split_clauses(s):
-        if re.search(r"반드시|꼭|무조건|필수|필참", clause) and re.search(_PART_VERB, clause):
+    for i, clause in enumerate(clauses):
+        # '반드시 포함해줘' 처럼 참석 동사 없이 '포함'으로 말하는 경우도 필수 참석자로 본다.
+        # (_PART_VERB 자체는 건드리지 않는다 — 시간 조건 판정이 그 목록을 함께 쓴다.)
+        if re.search(r"반드시|꼭|무조건|필수|필참", clause) and (
+                re.search(_PART_VERB, clause) or re.search(r"포함", clause)):
             req_names += _find_names(clause, names)
             req_names += _unknown_name_tokens(clause, names)
+            # '재원, 도연은 꼭 참석해야 해' — 쉼표로 앞에 나열된 이름만 있는 절도 함께 묶는다.
+            for prev in reversed(clauses[:i]):
+                bare = _find_names(prev, names)
+                if len(bare) == 1 and re.fullmatch(
+                        r"\s*" + re.escape(bare[0]) + r"\s*(?:은|는|이|가|와|과|랑|도|만)?\s*", prev):
+                    req_names.append(bare[0])
+                else:
+                    break
     req_names += _required_by_name(s, names)
     # '재원만 꼭 와야 해' / '승현은 선택 참석이야' → 필수 참석자 외에는 응답이 필요 없다
     only = [n for n in names if re.search(

@@ -41,17 +41,35 @@ def test_default_session_emails_have_no_policy_lines():
 
 # ---- 정족수 확정 ---------------------------------------------------------------------
 
-def test_quorum_confirms_without_waiting_for_the_optional_participant():
+def test_quorum_waits_for_the_last_participant_before_confirming():
+    """정족수를 채웠어도 응답하지 않은 사람이 남아 있으면 확정하지 않는다 (조기 확정 금지)."""
     f = start_flow(policy=_quorum(2))
     assert f.session["approvals_needed"] == 2
     assert f.approve("민지").status == "recorded"           # 주최자(자동 필수)
-    assert f.approve("준호").status == "all_approved"       # 2명 → 서연은 아직 응답 안 함
+    assert f.approve("준호").status == "recorded"           # 2명이지만 서연이 아직 미응답
+    assert f.session["state"] == PENDING
+    assert commit_mod.finalize(f.sid, f.transport).state == PENDING    # 커밋도 막힌다
+    assert f.created_events() == 0 and f.balances() == {a.agent_id: 0.0 for a in f.agents}
+
+    # 마지막 사람이 응답하면(승인) 그때 확정된다
+    assert f.approve("서연").status == "all_approved"
     assert commit_mod.finalize(f.sid, f.transport).state == "COMMITTED"
     assert f.created_events() == 1
+    assert store.get_verdicts(f.sid) == (
+        {f.agent_id(n) for n in ("민지", "준호", "서연")}, set())
 
-    # 뒤늦게 서연이 링크를 눌러도 이미 끝난 요청이다 (링크가 폐기됨)
-    assert f.approve("서연").status == "invalid"
-    assert store.get_verdicts(f.sid) == ({f.agent_id("민지"), f.agent_id("준호")}, set())
+
+def test_a_late_decline_still_confirms_with_the_approvers():
+    """미응답자가 뒤늦게 거절해도, 그 응답이 도착한 뒤 정족수를 만족하면 확정한다."""
+    f = start_flow(policy=_quorum(2))
+    f.approve("민지")
+    assert f.approve("준호").status == "recorded"           # 아직 서연이 응답하지 않았다
+    assert f.created_events() == 0
+    assert f.reject("서연").status == "all_approved"        # 전원 응답 완료 → 기준 충족
+    assert commit_mod.finalize(f.sid, f.transport).state == "COMMITTED"
+    assert f.created_events() == 1
+    assert store.get_verdicts(f.sid) == ({f.agent_id("민지"), f.agent_id("준호")},
+                                         {f.agent_id("서연")})
 
 
 def test_optional_participant_can_decline_and_the_meeting_still_confirms():
@@ -93,6 +111,7 @@ def test_calendar_recheck_ignores_people_who_did_not_approve():
     g = start_flow(policy=_quorum(2))
     g.approve("민지")
     g.approve("준호")
+    g.reject("서연")                                         # 전원 응답을 마쳐야 확정 단계로 간다
     s, e = g.slots[g.slot_index]
     g.agents[1].backend.add_busy("primary", s, e)
     assert commit_mod.finalize(g.sid, g.transport).state == "STALE_CONFLICT"
@@ -113,8 +132,9 @@ def test_required_participant_decline_moves_to_the_next_candidate():
     assert [p["status"] for p in store.get_proposals(f.sid)] == ["rejected", "open"]
     # 새 제안에는 새 승인이 필요하다 (이전 응답은 재사용되지 않는다)
     assert f.approve("민지").status == "recorded"
-    assert f.approve("서연").status == "all_approved"       # 필수 2명 + 총 2명 → 기준 충족
-    assert f.approve("준호").status == "invalid"
+    assert f.approve("서연").status == "recorded"           # 필수 2명이 모였지만 준호가 아직 미응답
+    assert f.session["state"] == PENDING
+    assert f.approve("준호").status == "all_approved"       # 전원 응답 → 기준 충족
 
 
 def test_organizer_decline_always_fails_the_slot():
@@ -151,7 +171,8 @@ def test_ratio_policy_behaves_like_the_derived_count():
     f = start_flow(policy={"mode": "min_ratio", "min_ratio": 0.5, "required": []})
     assert f.session["approvals_needed"] == 2               # ceil(0.5 * 3)
     f.approve("민지")
-    assert f.approve("서연").status == "all_approved"
+    assert f.approve("서연").status == "recorded"            # 2명이지만 준호가 아직 미응답
+    assert f.approve("준호").status == "all_approved"        # 전원 응답 → 기준 충족
 
 
 # ---- 정책은 바뀌지 않는다 ----------------------------------------------------------------

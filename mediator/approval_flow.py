@@ -362,6 +362,64 @@ def decide_for_agent(session_id: str, agent_id: str, verdict: str,
     return res
 
 
+def settle_expired_sessions() -> dict:
+    """응답 기한이 지난 승인 대기 세션을 '한 번만' 마무리한다.
+
+    기한이 지나면 더 기다릴 이유가 없으므로, 그때까지 모인 응답으로 정족수·필수 참석자 기준을
+    다시 검증한다 (정족수는 초대된 전체 인원 기준이다):
+      - 기준 충족  → 이 제안을 승인으로 닫고 확정 절차(재확인 → 커밋)로 넘긴다
+      - 미충족     → 기존과 같이 EXPIRED 로 종료한다 (이벤트·잔액 변화 없음)
+
+    조건부 UPDATE 라 여러 번 불려도 세션마다 한 번만 결정된다.
+    Returns: {"finalize": [session_id...], "expired": [session_id...]}
+    """
+    ts = store.now()
+    out: dict = {"finalize": [], "expired": []}
+    events: list[dict] = []
+    with store.connect() as c:
+        rows = c.execute(
+            "SELECT * FROM sessions WHERE state = ? AND expires_at IS NOT NULL "
+            "AND expires_at < ?", (PENDING, ts)).fetchall()
+        for s in rows:
+            sid, version = s["session_id"], s["proposal_version"]
+            pids = [r["agent_id"] for r in c.execute(
+                "SELECT agent_id FROM participants WHERE session_id = ?", (sid,))]
+            approved, rejected = set(), set()
+            for r in c.execute("SELECT agent_id, verdict FROM approvals "
+                               "WHERE session_id = ? AND proposal_version = ?", (sid, version)):
+                (approved if r["verdict"] == "approve" else rejected).add(r["agent_id"])
+            pol = policy_mod.ApprovalPolicy.from_row(s)
+            if policy_mod.settle_at_deadline(pol, pids, approved, rejected) == "approved":
+                got = c.execute("UPDATE proposals SET status = 'approved', closed_at = ? "
+                                "WHERE session_id = ? AND version = ? AND status = 'open'",
+                                (ts, sid, version))
+                if got.rowcount:
+                    _close_open_links_tx(c, sid, version, ts)
+                    c.execute("INSERT INTO transitions (session_id, from_state, to_state, "
+                              "detail, at) VALUES (?,?,?,?,?)",
+                              (sid, PENDING, PENDING, "deadline reached: quorum satisfied", ts))
+                    events.append({"type": "approvals_complete", "round": version})
+                    out["finalize"].append(sid)
+                continue
+            cur = c.execute(
+                "UPDATE sessions SET state = 'EXPIRED', fail_reason = 'approval timeout', "
+                "updated_at = ? WHERE session_id = ? AND state = ?", (ts, sid, PENDING))
+            if cur.rowcount:
+                c.execute("UPDATE proposals SET status = 'expired', closed_at = ? "
+                          "WHERE session_id = ? AND status = 'open'", (ts, sid))
+                _close_open_links_tx(c, sid, version, ts)
+                c.execute("INSERT INTO transitions (session_id, from_state, to_state, detail, at) "
+                          "VALUES (?,?,'EXPIRED','ttl',?)", (sid, PENDING, ts))
+                events.append({"type": "approval_terminated", "state": "EXPIRED",
+                               "detail": "승인 시간이 지났습니다"})
+                out["expired"].append(sid)
+    _emit_all(events)
+    for sid in out["finalize"]:               # 커밋은 트랜잭션 밖에서 (기존 확정 경로와 같다)
+        if _hooks["all_approved"]:
+            _hooks["all_approved"](sid)
+    return out
+
+
 def recover_from_stale_conflict(session_id: str) -> DecisionResult:
     """승인 대기 중 캘린더 충돌(STALE_CONFLICT)이 확인된 세션을 다음 후보로 넘긴다.
 
